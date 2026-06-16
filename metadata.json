@@ -1,0 +1,6 @@
+{
+  "name": "Foto para E-mail",
+  "description": "Tire fotos com a sua câmera ou carregue imagens e envie-as diretamente para o seu e-mail de forma segura usando o Gmail.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
