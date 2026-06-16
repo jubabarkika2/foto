@@ -29,6 +29,7 @@ export default function App() {
   // Iframe sandboxing detect and helper state
   const [isInIframe, setIsInIframe] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
+  const [showHelper, setShowHelper] = useState(false);
 
   useEffect(() => {
     try {
@@ -366,18 +367,18 @@ export default function App() {
                 Para tirar ou enviar fotos direto para a sua caixa de entrada, faça login com sua conta do Google.
               </p>
 
-              {/* aviso explicativo para o iframe do visualizador do AI Studio */}
-              {isInIframe && (
+              {/* aviso explicativo para o iframe ou celular */}
+              {(isInIframe || showHelper) && (
                 <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 text-left mb-6 flex flex-col gap-2.5" id="iframe_sandbox_warning">
                   <div className="flex gap-2 text-amber-800 text-xs font-semibold items-center">
                     <AlertCircle className="w-4 h-4 text-amber-600" />
-                    <span>Bloqueio de Pop-up (Ambiente Sandbox)</span>
+                    <span>Tutorial: Como Resolver no Celular</span>
                   </div>
                   <p className="text-[11px] text-amber-700 leading-relaxed font-medium">
-                    Como o app está dentro do visualizador integrado do AI Studio, seu navegador impede a abertura da janela de login por segurança. 
+                    Se você está no celular ou de dentro de redes sociais (WhatsApp, Instagram, etc.), o navegador interno bloqueia a janela de login do Google por segurança.
                   </p>
                   <p className="text-[11px] text-amber-700 leading-relaxed font-bold">
-                    Para resolver, abra o aplicativo em uma nova aba clicando abaixo:
+                    Para funcionar 100%: toque no botão abaixo para abrir diretamente no seu navegador padrão (Safari ou Chrome), ou copie o link e cole no navegador!
                   </p>
                   <div className="flex gap-2 mt-1">
                     <button
@@ -422,6 +423,18 @@ export default function App() {
                 )}
                 <span>{isLoggingIn ? "Autenticando..." : "Entrar com o Google"}</span>
               </button>
+
+              {/* Botão de Ajuda Alternativo para abrir no celular se der erro */}
+              {!showHelper && !isInIframe && (
+                <button
+                  type="button"
+                  onClick={() => setShowHelper(true)}
+                  className="mt-4 text-xs text-blue-600 hover:text-blue-800 font-medium underline cursor-pointer"
+                  id="alternative_help_toggle"
+                >
+                  Problemas ao entrar ou usando pelo celular? Toque aqui.
+                </button>
+              )}
 
               {authError && (
                 <div className="mt-4 flex items-center gap-2 text-xs text-red-600 bg-red-50 p-3 rounded-xl border border-red-100" id="auth_error_container">
