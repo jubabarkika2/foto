@@ -26,6 +26,11 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // Backend SMTP feature configuration
+  const [hasSmtp, setHasSmtp] = useState(false);
+  const [smtpUser, setSmtpUser] = useState<string | null>(null);
+  const [checkingSmtp, setCheckingSmtp] = useState(true);
+
   // Iframe sandboxing detect and helper state
   const [isInIframe, setIsInIframe] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -37,6 +42,29 @@ export default function App() {
     } catch (e) {
       setIsInIframe(true);
     }
+
+    // Check backend SMTP configuration status
+    async function checkSmtpConfig() {
+      try {
+        const res = await fetch("/api/config-status");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "ok") {
+            setHasSmtp(data.hasSmtp);
+            setSmtpUser(data.smtpUser);
+            // If server has SMTP pre-configured, we bypass the absolute login wall!
+            if (data.hasSmtp) {
+              setNeedsAuth(false);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao verificar configuração SMTP do servidor:", e);
+      } finally {
+        setCheckingSmtp(false);
+      }
+    }
+    checkSmtpConfig();
   }, []);
 
   const copyToClipboard = async (text: string) => {
@@ -79,9 +107,18 @@ export default function App() {
   // App-specific states
   const [selectedMode, setSelectedMode] = useState<"camera" | "upload">("camera");
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
-  const [recipientEmail, setRecipientEmail] = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailBody, setEmailBody] = useState("");
+  const [recipientEmail, setRecipientEmail] = useState(() => {
+    return localStorage.getItem("last_recipient_email") || "";
+  });
+  const [emailSubject, setEmailSubject] = useState(() => {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short"
+    });
+    return `Foto de Email - ${formatter.format(now)}`;
+  });
+  const [emailBody, setEmailBody] = useState("Olá! Segue em anexo a foto enviada diretamente através do aplicativo Foto para E-mail.");
   const [isSending, setIsSending] = useState(false);
   const [sendSuccess, setSendSuccess] = useState(false);
   const [sendingError, setSendingError] = useState<string | null>(null);
@@ -129,6 +166,13 @@ export default function App() {
       stopCamera();
     };
   }, []);
+
+  // Save recipientEmail to localStorage whenever it changes
+  useEffect(() => {
+    if (recipientEmail) {
+      localStorage.setItem("last_recipient_email", recipientEmail);
+    }
+  }, [recipientEmail]);
 
   // Sync camera when mode transitions to "camera"
   useEffect(() => {
@@ -269,7 +313,12 @@ export default function App() {
   // Email sending orchestration
   const handleSendEmail = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !capturedPhoto) return;
+    if (!capturedPhoto) return;
+
+    if (!recipientEmail) {
+      setSendingError("Por favor, preencha o e-mail de destino.");
+      return;
+    }
 
     // Mutating/sending verification
     const confirmed = window.confirm(
@@ -281,34 +330,60 @@ export default function App() {
     setSendingError(null);
 
     try {
-      // Strip off "data:image/jpeg;base64," prefix for the Gmail REST call
-      const match = capturedPhoto.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
-      if (!match) {
-        throw new Error("Formato de imagem inválido.");
+      if (hasSmtp) {
+        // Envio direto via SMTP no backend (Sem login no celular!)
+        const response = await fetch("/api/send-email", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            to: recipientEmail,
+            subject: emailSubject || "Foto Enviada",
+            body: emailBody || "",
+            imageBase64: capturedPhoto,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok || data.error) {
+          throw new Error(data.error || "Falha ao enviar através do SMTP do servidor.");
+        }
+        setSendSuccess(true);
+      } else {
+        // Envio clássico via API do Gmail (Requer Token do Google OAuth)
+        if (!token) {
+          throw new Error("Sessão expirada ou sem login. Por favor, conecte com o Google antes de enviar.");
+        }
+
+        const match = capturedPhoto.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+        if (!match) {
+          throw new Error("Formato de imagem inválido.");
+        }
+
+        const fileType = match[1];
+        const base64Content = match[2];
+        
+        const attachment: GmailAttachment = {
+          fileName: `foto_capturada_${Date.now()}.jpg`,
+          fileType: fileType,
+          base64Content: base64Content
+        };
+
+        await sendGmailMessage(
+          token,
+          recipientEmail,
+          emailSubject || "Foto Enviada",
+          emailBody || "",
+          [attachment]
+        );
+
+        setSendSuccess(true);
       }
-
-      const fileType = match[1];
-      const base64Content = match[2];
-      
-      const attachment: GmailAttachment = {
-        fileName: `foto_capturada_${Date.now()}.jpg`,
-        fileType: fileType,
-        base64Content: base64Content
-      };
-
-      await sendGmailMessage(
-        token,
-        recipientEmail,
-        emailSubject || "Foto Enviada",
-        emailBody || "",
-        [attachment]
-      );
-
-      setSendSuccess(true);
     } catch (err: any) {
       console.error("Failed to send email:", err);
       setSendingError(
-        err.message || "Erro desconhecido ao enviar e-mail. Verifique a conexão ou tente efetuar login novamente."
+        err.message || "Erro desconhecido ao enviar e-mail. Verifique a conexão ou tente novamente."
       );
     } finally {
       setIsSending(false);
@@ -352,8 +427,15 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {user && (
+          <div className="flex items-center gap-3">
+            {hasSmtp && (
+              <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-800 text-[11px] font-bold px-3 py-1.5 rounded-full border border-emerald-200 shadow-2xs" id="smtp_active_badge">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Envio Direto Ativo</span>
+              </div>
+            )}
+            
+            {user ? (
               <div className="flex items-center gap-3 bg-slate-100 py-1.5 pl-3 pr-2 rounded-full border border-slate-200" id="user_profile_badge">
                 <div className="text-right hidden sm:block">
                   <div className="text-xs font-semibold text-slate-900 leading-tight">{user.displayName}</div>
@@ -368,11 +450,24 @@ export default function App() {
                 )}
                 <button 
                   onClick={handleLogout} 
-                  className="p-1 text-slate-500 hover:text-red-600 transition-colors duration-150 rounded-full hover:bg-slate-200"
+                  className="p-1 text-slate-500 hover:text-red-600 transition-colors duration-150 rounded-full hover:bg-slate-200 cursor-pointer"
                   title="Sair da Conta"
                   id="logout_button"
                 >
                   <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : hasSmtp && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-medium hidden sm:inline">
+                  Modo Autônomo
+                </span>
+                <button
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  className="px-3 py-1.5 text-xs bg-slate-950 border border-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold transition-all shadow-2xs hover:shadow-xs cursor-pointer flex items-center gap-1"
+                >
+                  {isLoggingIn ? "..." : "Entrar com Google"}
                 </button>
               </div>
             )}
@@ -494,7 +589,28 @@ export default function App() {
                 </div>
               )}
 
-              <div className="mt-8 text-[11px] text-slate-400 font-medium" id="terms_badge">
+              {/* Informação sobre Envio Direto (Sem login) */}
+              <div className="mt-6 pt-5 border-t border-slate-100 text-left w-full" id="smtp_info_block">
+                <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-3.5 flex flex-col gap-1.5">
+                  <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                    💡 Dica: Use sem precisar de Login!
+                  </span>
+                  <p className="text-[11px] text-blue-700/90 leading-relaxed">
+                    Você pode pular o login do Google no celular configurando o <strong>Envio Direto (SMTP)</strong>. 
+                    Adicione as variáveis nos <strong>Secrets</strong> do AI Studio:
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5 mt-1 font-mono text-[9px] text-blue-800">
+                    <div className="bg-blue-100/60 px-2 py-1 rounded border border-blue-200">SMTP_USER</div>
+                    <div className="bg-blue-100/60 px-2 py-1 rounded border border-blue-200">SMTP_PASS</div>
+                  </div>
+                  <p className="text-[10px] text-blue-600/95 italic mt-1">
+                    Isso resolve 100% dos bloqueios de navegadores no celular!
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 text-[11px] text-slate-400 font-medium" id="terms_badge">
                 Conexão oficial segura usando Google OAuth e Firebase.
               </div>
             </motion.div>
@@ -737,7 +853,11 @@ export default function App() {
                             />
                             <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                           </div>
-                          <span className="text-[10px] text-slate-400">Default preenchido com a sua conta logada.</span>
+                          {user ? (
+                            <span className="text-[10px] text-slate-400">Preenchido com a sua conta Google conectada.</span>
+                          ) : (
+                            <span className="text-[10px] text-emerald-600 font-medium">⚡ Modo Envio Direto ativo! Digite qualquer e-mail de destino.</span>
+                          )}
                         </div>
 
                         <div className="flex flex-col gap-1">
