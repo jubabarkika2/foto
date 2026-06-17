@@ -39,6 +39,43 @@ export default function App() {
     }
   }, []);
 
+  const copyToClipboard = async (text: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+        return;
+      }
+    } catch (e) {
+      console.warn("navigator.clipboard failed, trying fallback: ", e);
+    }
+
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.top = "0";
+      textArea.style.left = "0";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const success = document.execCommand("copy");
+      document.body.removeChild(textArea);
+      if (success) {
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+        return;
+      }
+    } catch (err) {
+      console.error("Fallback copy failed: ", err);
+    }
+
+    // Direct user prompt if both failed
+    window.prompt("Não foi possível copiar automaticamente no seu celular. Por favor, copie o link abaixo manualmente:", text);
+  };
+
   // App-specific states
   const [selectedMode, setSelectedMode] = useState<"camera" | "upload">("camera");
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
@@ -371,35 +408,49 @@ export default function App() {
               {(isInIframe || showHelper) && (
                 <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 text-left mb-6 flex flex-col gap-2.5" id="iframe_sandbox_warning">
                   <div className="flex gap-2 text-amber-800 text-xs font-semibold items-center">
-                    <AlertCircle className="w-4 h-4 text-amber-600" />
+                    <AlertCircle className="w-4 h-4 text-amber-600 animate-pulse" />
                     <span>Tutorial: Como Resolver no Celular</span>
                   </div>
                   <p className="text-[11px] text-amber-700 leading-relaxed font-medium">
-                    Se você está no celular ou de dentro de redes sociais (WhatsApp, Instagram, etc.), o navegador interno bloqueia a janela de login do Google por segurança.
+                    Se você está no celular ou redes sociais (WhatsApp, Instagram, etc.), o navegador interno delas bloqueia o login do Google por segurança.
                   </p>
                   <p className="text-[11px] text-amber-700 leading-relaxed font-bold">
-                    Para funcionar 100%: toque no botão abaixo para abrir diretamente no seu navegador padrão (Safari ou Chrome), ou copie o link e cole no navegador!
+                    Para funcionar 100%, toque abaixo para abrir no Chrome/Safari do seu celular, ou use um dos botões de cópia:
                   </p>
+                  
                   <div className="flex gap-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => window.open(window.location.href, "_blank")}
-                      className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition-all shadow-xs flex items-center justify-center gap-1 cursor-pointer"
+                    <a
+                      href={window.location.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition-all shadow-xs flex items-center justify-center gap-1 cursor-pointer text-center"
                     >
-                      <span>Abrir Nova Aba</span>
+                      <span>Abrir no Navegador</span>
                       <ArrowRight className="w-3 h-3 rotate-[-45deg]" />
-                    </button>
+                    </a>
+                    
                     <button
                       type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(window.location.href);
-                        setIsCopied(true);
-                        setTimeout(() => setIsCopied(false), 2000);
-                      }}
+                      onClick={() => copyToClipboard(window.location.href)}
                       className="flex-1 py-2 bg-white border border-amber-300 hover:bg-amber-50 text-amber-800 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
                     >
                       {isCopied ? "Copiado!" : "Copiar Link"}
                     </button>
+                  </div>
+
+                  {/* Campo de Texto selecionável adicional como backup absoluto! */}
+                  <div className="mt-2 pt-2 border-t border-amber-200 flex flex-col gap-1.5">
+                    <span className="text-[10px] text-amber-800 font-bold">Copiar manualmente (Dê um toque longo ou duplo clique abaixo):</span>
+                    <input
+                      type="text"
+                      readOnly
+                      value={window.location.href}
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).select();
+                        copyToClipboard(window.location.href);
+                      }}
+                      className="w-full px-2.5 py-1.5 text-[10px] font-mono border border-amber-300 bg-white rounded-lg text-slate-700 outline-hidden select-all"
+                    />
                   </div>
                 </div>
               )}
