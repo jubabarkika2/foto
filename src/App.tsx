@@ -11,7 +11,9 @@ import {
   Send, 
   Sparkles, 
   User,
-  ArrowRight
+  ArrowRight,
+  X,
+  Eye
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { googleSignIn, logout, initAuth } from "./utils/firebaseAuth";
@@ -106,7 +108,9 @@ export default function App() {
 
   // App-specific states
   const [selectedMode, setSelectedMode] = useState<"camera" | "upload">("camera");
-  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
+  const [capturedPhotos, setCapturedPhotos] = useState<string[]>([]);
+  const [previewPhoto, setPreviewPhoto] = useState<string | null>(null);
+  const [cameraFlash, setCameraFlash] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState(() => {
     return localStorage.getItem("last_recipient_email") || "";
   });
@@ -116,9 +120,9 @@ export default function App() {
       dateStyle: "short",
       timeStyle: "short"
     });
-    return `Foto de Email - ${formatter.format(now)}`;
+    return `Fotos de Email - ${formatter.format(now)}`;
   });
-  const [emailBody, setEmailBody] = useState("Olá! Segue em anexo a foto enviada diretamente através do aplicativo Foto para E-mail.");
+  const [emailBody, setEmailBody] = useState("Olá! Seguem em anexo as fotos enviadas diretamente através do aplicativo Foto para E-mail.");
   const [isSending, setIsSending] = useState(false);
   const [sendSuccess, setSendSuccess] = useState(false);
   const [sendingError, setSendingError] = useState<string | null>(null);
@@ -150,8 +154,8 @@ export default function App() {
           dateStyle: "short",
           timeStyle: "short"
         });
-        setEmailSubject(`Foto de Email - ${formatter.format(now)}`);
-        setEmailBody("Olá! Segue em anexo a foto enviada diretamente através do aplicativo Foto para E-mail.");
+        setEmailSubject(`Fotos de Email - ${formatter.format(now)}`);
+        setEmailBody("Olá! Seguem em anexo as fotos enviadas diretamente através do aplicativo Foto para E-mail.");
       },
       () => {
         setNeedsAuth(true);
@@ -176,13 +180,13 @@ export default function App() {
 
   // Sync camera when mode transitions to "camera"
   useEffect(() => {
-    if (selectedMode === "camera" && !needsAuth && !capturedPhoto) {
+    if (selectedMode === "camera" && !needsAuth) {
       startCamera();
     } else {
       stopCamera();
     }
     return () => stopCamera();
-  }, [selectedMode, needsAuth, capturedPhoto]);
+  }, [selectedMode, needsAuth]);
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
@@ -201,7 +205,7 @@ export default function App() {
           dateStyle: "short",
           timeStyle: "short"
         });
-        setEmailSubject(`Foto de Email - ${formatter.format(now)}`);
+        setEmailSubject(`Fotos de Email - ${formatter.format(now)}`);
       }
     } catch (err: any) {
       console.error("Login failed:", err);
@@ -215,7 +219,8 @@ export default function App() {
     try {
       stopCamera();
       await logout();
-      setCapturedPhoto(null);
+      setCapturedPhotos([]);
+      setPreviewPhoto(null);
       setSendSuccess(false);
     } catch (err) {
       console.error("Logout failed:", err);
@@ -283,26 +288,33 @@ export default function App() {
       canvas.height = height;
       
       if (ctx) {
-        // Mirrored if using human-facing camera? No, standard draw is clear.
         ctx.drawImage(video, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        setCapturedPhoto(dataUrl);
-        stopCamera();
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        setCapturedPhotos(prev => [...prev, dataUrl]);
+        
+        // Visually trigger a quick flash
+        setCameraFlash(true);
+        setTimeout(() => setCameraFlash(false), 200);
       }
     }
   };
 
   // Upload handling
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setCapturedPhoto(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      (Array.from(files) as File[]).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          if (event.target?.result) {
+            setCapturedPhotos(prev => [...prev, event.target.result as string]);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+    if (e.target) {
+      e.target.value = "";
     }
   };
 
@@ -313,7 +325,7 @@ export default function App() {
   // Email sending orchestration
   const handleSendEmail = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!capturedPhoto) return;
+    if (capturedPhotos.length === 0) return;
 
     if (!recipientEmail) {
       setSendingError("Por favor, preencha o e-mail de destino.");
@@ -322,7 +334,7 @@ export default function App() {
 
     // Mutating/sending verification
     const confirmed = window.confirm(
-      `Deseja enviar esta foto para o e-mail: ${recipientEmail}?`
+      `Deseja enviar ${capturedPhotos.length} foto(s) para o e-mail: ${recipientEmail}?`
     );
     if (!confirmed) return;
 
@@ -339,9 +351,9 @@ export default function App() {
           },
           body: JSON.stringify({
             to: recipientEmail,
-            subject: emailSubject || "Foto Enviada",
+            subject: emailSubject || "Fotos Enviadas",
             body: emailBody || "",
-            imageBase64: capturedPhoto,
+            imagesBase64: capturedPhotos,
           }),
         });
 
@@ -356,26 +368,30 @@ export default function App() {
           throw new Error("Sessão expirada ou sem login. Por favor, conecte com o Google antes de enviar.");
         }
 
-        const match = capturedPhoto.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
-        if (!match) {
-          throw new Error("Formato de imagem inválido.");
-        }
+        const attachments: GmailAttachment[] = [];
 
-        const fileType = match[1];
-        const base64Content = match[2];
-        
-        const attachment: GmailAttachment = {
-          fileName: `foto_capturada_${Date.now()}.jpg`,
-          fileType: fileType,
-          base64Content: base64Content
-        };
+        capturedPhotos.forEach((photo, index) => {
+          const match = photo.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+          if (!match) {
+            throw new Error(`Formato de imagem inválido na foto ${index + 1}.`);
+          }
+
+          const fileType = match[1];
+          const base64Content = match[2];
+          
+          attachments.push({
+            fileName: `foto_${index + 1}_${Date.now()}.jpg`,
+            fileType: fileType,
+            base64Content: base64Content
+          });
+        });
 
         await sendGmailMessage(
           token,
           recipientEmail,
-          emailSubject || "Foto Enviada",
+          emailSubject || "Fotos Enviadas",
           emailBody || "",
-          [attachment]
+          attachments
         );
 
         setSendSuccess(true);
@@ -391,9 +407,10 @@ export default function App() {
   };
 
   const resetState = () => {
-    setCapturedPhoto(null);
+    setCapturedPhotos([]);
     setSendSuccess(false);
     setSendingError(null);
+    setPreviewPhoto(null);
     
     // Refresh datetime strings
     const now = new Date();
@@ -401,7 +418,7 @@ export default function App() {
       dateStyle: "short",
       timeStyle: "short"
     });
-    setEmailSubject(`Foto de Email - ${formatter.format(now)}`);
+    setEmailSubject(`Fotos de Email - ${formatter.format(now)}`);
     
     if (selectedMode === "camera") {
       startCamera();
@@ -624,37 +641,42 @@ export default function App() {
                   initial={{ opacity: 0, scale: 0.98 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 text-center shadow-lg max-w-md mx-auto"
+                  className="bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 text-center shadow-lg max-w-xl mx-auto w-full"
                   id="success_card"
                 >
                   <div className="w-20 h-20 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6 border border-green-100">
                     <CheckCircle className="w-10 h-10" />
                   </div>
                   <h2 className="text-2xl font-bold tracking-tight text-slate-900 mb-2" id="success_heading">
-                    E-mail Enviado!
+                    Tudo Enviado!
                   </h2>
                   <p className="text-slate-600 text-sm mb-6" id="success_description">
-                    Sua foto foi enviada com sucesso para <strong className="text-slate-900 break-all">{recipientEmail}</strong> de forma direta e segura.
+                    Seu lote de <strong>{capturedPhotos.length} foto(s)</strong> foi enviado com sucesso para <strong className="text-slate-900 break-all">{recipientEmail}</strong> de forma direta e segura.
                   </p>
 
-                  {capturedPhoto && (
-                    <div className="w-full h-40 rounded-2xl overflow-hidden border border-slate-200 mb-6 bg-slate-50 relative">
-                      <img src={capturedPhoto} alt="Foto Enviada" className="w-full h-full object-cover" />
-                    </div>
-                  )}
+                  <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto p-2 bg-slate-50 border border-slate-100 rounded-2xl mb-6">
+                    {capturedPhotos.map((photo, idx) => (
+                      <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 shadow-2xs">
+                        <img src={photo} alt={`Foto enviada ${idx + 1}`} className="w-full h-full object-cover" />
+                        <span className="absolute bottom-1 left-1 px-1.5 py-0.5 text-[8px] font-bold bg-black/60 text-white rounded-md">
+                          #{idx + 1}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
 
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col sm:flex-row gap-3">
                     <button
                       onClick={resetState}
-                      className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm"
+                      className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm cursor-pointer"
                       id="shoot_again_button"
                     >
                       <Camera className="w-4 h-4" />
-                      Capturar Outra Foto
+                      Capturar Novas Fotos
                     </button>
                     <button
                       onClick={() => setSendSuccess(false)}
-                      className="w-full py-3 text-slate-500 hover:text-slate-900 hover:bg-slate-100 font-medium rounded-xl transition-all text-sm"
+                      className="flex-1 py-3 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 hover:border-slate-300 font-medium rounded-xl transition-all text-sm cursor-pointer"
                       id="view_fields_button"
                     >
                       Voltar aos detalhes
@@ -669,63 +691,52 @@ export default function App() {
                   <div className="md:col-span-7 flex flex-col gap-4" id="photo_block">
                     <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs">
                       {/* Mode Tab Option selectors */}
-                      {!capturedPhoto && (
-                        <div className="flex bg-slate-100 p-1 rounded-xl mb-4" id="mode_tabs">
-                          <button
-                            onClick={() => setSelectedMode("camera")}
-                            className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all ${
-                              selectedMode === "camera"
-                                ? "bg-white text-slate-900 shadow-xs"
-                                : "text-slate-500 hover:text-slate-800"
-                            }`}
-                            id="mode_tab_camera"
-                          >
-                            <Camera className="w-4 h-4" />
-                            Câmera
-                          </button>
-                          <button
-                            onClick={() => setSelectedMode("upload")}
-                            className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all ${
-                              selectedMode === "upload"
-                                ? "bg-white text-slate-900 shadow-xs"
-                                : "text-slate-500 hover:text-slate-800"
-                            }`}
-                            id="mode_tab_upload"
-                          >
-                            <Upload className="w-4 h-4" />
-                            Upload de Arquivo
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex bg-slate-100 p-1 rounded-xl mb-4" id="mode_tabs">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedMode("camera")}
+                          className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                            selectedMode === "camera"
+                              ? "bg-white text-slate-900 shadow-xs"
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                          id="mode_tab_camera"
+                        >
+                          <Camera className="w-4 h-4" />
+                          Bater Fotos (Câmera)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedMode("upload")}
+                          className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                            selectedMode === "upload"
+                              ? "bg-white text-slate-900 shadow-xs"
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                          id="mode_tab_upload"
+                        >
+                          <Upload className="w-4 h-4" />
+                          Selecionar Arquivos (Upload)
+                        </button>
+                      </div>
 
                       {/* WORKZONE STAGE */}
                       <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center group" id="workzone_stage">
-                        <AnimatePresence mode="wait">
-                          {capturedPhoto ? (
-                            /* Preview Stage content */
+                        {/* Shutter flash animation effect overlay */}
+                        <AnimatePresence>
+                          {cameraFlash && (
                             <motion.div
-                              key="captured-preview"
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
+                              initial={{ opacity: 1 }}
+                              animate={{ opacity: 0 }}
                               exit={{ opacity: 0 }}
-                              className="absolute inset-0 w-full h-full flex flex-col"
-                            >
-                              <img src={capturedPhoto} alt="Preview" className="w-full h-full object-cover" />
-                              <div className="absolute top-3 right-3 flex items-center gap-2">
-                                <button
-                                  onClick={() => setCapturedPhoto(null)}
-                                  className="bg-black/60 hover:bg-red-600/90 text-white p-2.5 rounded-full transition-all duration-150 backdrop-blur-md hover:scale-105"
-                                  title="Excluir Imagem"
-                                  id="delete_photo_button"
-                                >
-                                  <Trash2 className="w-4.5 h-4.5" />
-                                </button>
-                              </div>
-                              <div className="absolute bottom-3 left-3 bg-black/60 text-white px-3 py-1.5 rounded-lg text-xs font-medium backdrop-blur-md">
-                                Pronto para enviar
-                              </div>
-                            </motion.div>
-                          ) : selectedMode === "camera" ? (
+                              transition={{ duration: 0.15 }}
+                              className="absolute inset-0 bg-white z-50 pointer-events-none"
+                            />
+                          )}
+                        </AnimatePresence>
+
+                        <AnimatePresence mode="wait">
+                          {selectedMode === "camera" ? (
                             /* Camera Live Feed view */
                             <motion.div
                               key="camera-view"
@@ -739,6 +750,7 @@ export default function App() {
                                   <AlertCircle className="w-10 h-10 text-red-500" />
                                   <p className="text-xs max-w-xs">{cameraError}</p>
                                   <button
+                                    type="button"
                                     onClick={startCamera}
                                     className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg transition-all"
                                     id="retry_camera_button"
@@ -760,11 +772,12 @@ export default function App() {
                                     muted
                                     className="w-full h-full object-cover"
                                   />
-                                  {/* Overlay Shutter overlay triggers */}
-                                  <div className="absolute bottom-4 left-0 right-0 flex justify-center">
+                                  {/* Shutter button overlay */}
+                                  <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4">
                                     <button
+                                      type="button"
                                       onClick={capturePhoto}
-                                      className="w-16 h-16 bg-white hover:bg-red-55 px-2 rounded-full border-4 border-slate-300 flex items-center justify-center shadow-lg transform active:scale-95 transition-all cursor-pointer hover:border-slate-100"
+                                      className="w-16 h-16 bg-white hover:bg-red-50 p-2 rounded-full border-4 border-slate-300 flex items-center justify-center shadow-lg transform active:scale-95 transition-all cursor-pointer hover:border-slate-100"
                                       title="Capturar Foto"
                                       id="shutter_button"
                                     >
@@ -789,15 +802,19 @@ export default function App() {
                                 <Upload className="w-6 h-6" />
                               </div>
                               <p className="text-slate-300 text-xs font-semibold mb-1">
-                                Clique para selecionar uma foto
+                                Clique para selecionar fotos
                               </p>
                               <p className="text-slate-500 text-[11px]">
+                                Você pode selecionar várias fotos de uma vez!
+                              </p>
+                              <p className="text-slate-600 text-[10px] mt-1 italic">
                                 Formatos aceitos: JPEG, PNG
                               </p>
                               <input
                                 ref={fileInputRef}
                                 type="file"
                                 accept="image/*"
+                                multiple
                                 onChange={handleFileChange}
                                 className="hidden"
                                 id="hidden_input_file"
@@ -807,13 +824,71 @@ export default function App() {
                         </AnimatePresence>
                       </div>
 
-                      {/* Auxiliary helper details */}
-                      {!capturedPhoto && selectedMode === "camera" && (
-                        <p className="text-[11px] text-slate-400 mt-2.5 text-center flex items-center justify-center gap-1">
-                          <Sparkles className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
-                          Aponte para o objeto que você quer registrar e clique no botão circular vermelho para capturar.
-                        </p>
-                      )}
+                      {/* Instructions panel */}
+                      <p className="text-[11px] text-slate-400 mt-2.5 text-center flex items-center justify-center gap-1">
+                        <Sparkles className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+                        {selectedMode === "camera" 
+                          ? "Bata fotos consecutivas! Elas vão se acumulando na sua galeria abaixo." 
+                          : "Selecione múltiplas imagens do seu dispositivo."}
+                      </p>
+
+                      {/* LIVE GALLERY DRAWER SECTION */}
+                      <div className="mt-5 border-t border-slate-100 pt-4" id="gallery_drawer">
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                            Galeria Temporária ({capturedPhotos.length} foto{capturedPhotos.length !== 1 ? "s" : ""})
+                          </label>
+                          {capturedPhotos.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setCapturedPhotos([])}
+                              className="text-[10px] text-red-500 hover:text-red-700 font-bold transition-colors cursor-pointer"
+                              id="clear_gallery_btn"
+                            >
+                              Limpar Tudo
+                            </button>
+                          )}
+                        </div>
+
+                        {capturedPhotos.length > 0 ? (
+                          <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-40 overflow-y-auto p-1 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                            {capturedPhotos.map((photo, idx) => (
+                              <div key={idx} className="relative aspect-square group border border-slate-200 rounded-lg overflow-hidden bg-slate-200 shadow-2xs">
+                                <img src={photo} alt={`Foto ${idx + 1}`} className="w-full h-full object-cover" />
+                                <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 backdrop-blur-3xs">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewPhoto(photo)}
+                                    className="p-1.25 bg-white text-slate-800 rounded-full hover:scale-105 transition-transform"
+                                    title="Visualizar ampliado"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCapturedPhotos(prev => prev.filter((_, i) => i !== idx));
+                                    }}
+                                    className="p-1.25 bg-red-650 hover:bg-red-700 text-white rounded-full hover:scale-105 transition-transform"
+                                    title="Deletar foto"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <span className="absolute bottom-1 right-1 px-1 text-[8px] font-bold bg-slate-900/70 text-white rounded">
+                                  #{idx + 1}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-6 bg-slate-50 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center gap-1.5 text-slate-400">
+                            <Camera className="w-6 h-6 opacity-40 text-slate-500" />
+                            <span className="text-[11px] font-semibold text-slate-500">Nenhuma foto capturada ainda</span>
+                            <span className="text-[10px] px-4 leading-relaxed">Suas fotos aparecerão aqui em lote pronto para envio e verificação.</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -828,10 +903,10 @@ export default function App() {
                       </div>
 
                       {/* Photo verification notification */}
-                      {!capturedPhoto && (
-                        <div className="p-3.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-2xl flex gap-2" id="photo_warning">
+                      {capturedPhotos.length === 0 && (
+                        <div className="p-3.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-2xl flex gap-2 animate-snappy" id="photo_warning">
                           <AlertCircle className="w-5 h-5 shrink-0 text-amber-600" />
-                          <span className="leading-snug">Você precisa <strong>capturar uma foto com a câmera</strong> ou <strong>fazer upload de uma imagem</strong> antes de poder enviar.</span>
+                          <span className="leading-snug">Você precisa realizar <strong>pelo menos uma captura com a câmera</strong> ou <strong>fazer upload de arquivos</strong> antes de prosseguir com o envio.</span>
                         </div>
                       )}
 
@@ -884,7 +959,7 @@ export default function App() {
                             rows={3}
                             value={emailBody}
                             onChange={(e) => setEmailBody(e.target.value)}
-                            placeholder="Escreva uma observação sobre esta foto..."
+                            placeholder="Escreva uma observação sobre este lote de fotos..."
                             className="w-full text-sm px-3 py-2 border border-slate-200 rounded-xl focus:outline-hidden focus:border-blue-600 resize-none font-medium"
                           />
                         </div>
@@ -900,17 +975,17 @@ export default function App() {
                       {/* Send submit button */}
                       <button
                         type="submit"
-                        disabled={isSending || !capturedPhoto}
+                        disabled={isSending || capturedPhotos.length === 0}
                         className="w-full mt-2 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-sm transition-all shadow-md active:shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         id="submit_email_button"
                       >
                         {isSending ? (
                           <>
-                            <RefreshCw className="w-4 h-4 animate-spin" /> Enviando Foto...
+                            <RefreshCw className="w-4 h-4 animate-spin" /> Enviando {capturedPhotos.length} Foto(s)...
                           </>
                         ) : (
                           <>
-                            <Send className="w-4 h-4" /> Enviar para o E-mail
+                            <Send className="w-4 h-4" /> Enviar {capturedPhotos.length > 0 ? `${capturedPhotos.length} foto(s)` : ""} para o E-mail
                           </>
                         )}
                       </button>
@@ -930,6 +1005,43 @@ export default function App() {
           Foto para E-mail &bull; Desenvolvido com segurança utilizando as APIs oficiais do Google Workspace.
         </p>
       </footer>
+
+      {/* Ligtbox overlay */}
+      <AnimatePresence>
+        {previewPhoto && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6"
+            onClick={() => setPreviewPhoto(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.95 }}
+              className="relative max-w-3xl w-full max-h-[85vh] rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="absolute top-4 right-4 z-10">
+                <button
+                  type="button"
+                  onClick={() => setPreviewPhoto(null)}
+                  className="p-2 bg-black/60 text-white hover:bg-red-650 rounded-full transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-4 bg-slate-950/25 backdrop-blur-md absolute bottom-0 inset-x-0 text-white text-xs select-none">
+                Visualização em tamanho real
+              </div>
+              <div className="flex-1 overflow-auto flex items-center justify-center min-h-[40vh]">
+                <img src={previewPhoto} alt="Exibição em tamanho real" className="max-w-full max-h-[80vh] object-contain shadow-2xl" />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Hidden helper elements canvas schema */}
       <canvas ref={canvasRef} className="hidden" />

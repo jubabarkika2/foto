@@ -30,10 +30,11 @@ async function startServer() {
 
   // API Route: Send photo directly via backend SMTP configured by environment variables
   app.post("/api/send-email", async (req, res) => {
-    const { to, subject, body, imageBase64 } = req.body;
+    const { to, subject, body, imageBase64, imagesBase64 } = req.body;
 
-    if (!to || !subject || !imageBase64) {
-      res.status(400).json({ error: "Parâmetros 'to', 'subject' e 'imageBase64' são obrigatórios." });
+    const hasImages = (imagesBase64 && Array.isArray(imagesBase64) && imagesBase64.length > 0) || imageBase64;
+    if (!to || !subject || !hasImages) {
+      res.status(400).json({ error: "Parâmetros 'to', 'subject' e pelo menos uma imagem são obrigatórios." });
       return;
     }
 
@@ -61,27 +62,40 @@ async function startServer() {
         },
       });
 
-      // Extract raw base64 data and mime type
-      const match = imageBase64.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
-      const mimeType = match ? match[1] : "image/jpeg";
-      const base64Data = match ? match[2] : imageBase64;
+      const attachments: any[] = [];
 
-      const extension = mimeType.split("/")[1] || "jpg";
-      const fileName = `foto_capturada_${Date.now()}.${extension}`;
+      if (imagesBase64 && Array.isArray(imagesBase64)) {
+        imagesBase64.forEach((img, index) => {
+          const match = img.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+          const mimeType = match ? match[1] : "image/jpeg";
+          const base64Data = match ? match[2] : img;
+          const extension = mimeType.split("/")[1] || "jpg";
+          attachments.push({
+            filename: `foto_${index + 1}_${Date.now()}.${extension}`,
+            content: base64Data,
+            encoding: "base64",
+            contentType: mimeType
+          });
+        });
+      } else if (imageBase64) {
+        const match = imageBase64.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+        const mimeType = match ? match[1] : "image/jpeg";
+        const base64Data = match ? match[2] : imageBase64;
+        const extension = mimeType.split("/")[1] || "jpg";
+        attachments.push({
+          filename: `foto_capturada_${Date.now()}.${extension}`,
+          content: base64Data,
+          encoding: "base64",
+          contentType: mimeType
+        });
+      }
 
       const mailOptions = {
         from: `"Foto para E-mail" <${user}>`,
         to,
         subject,
-        text: body || "Foto enviada pelo aplicativo Foto para E-mail.",
-        attachments: [
-          {
-            filename: fileName,
-            content: base64Data,
-            encoding: "base64",
-            contentType: mimeType
-          }
-        ]
+        text: body || "Fotos enviadas pelo aplicativo Foto para E-mail.",
+        attachments
       };
 
       const info = await transporter.sendMail(mailOptions);
