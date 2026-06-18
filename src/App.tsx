@@ -13,7 +13,8 @@ import {
   User,
   ArrowRight,
   X,
-  Eye
+  Eye,
+  Settings
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { googleSignIn, logout, initAuth } from "./utils/firebaseAuth";
@@ -108,6 +109,7 @@ export default function App() {
 
   // App-specific states
   const [selectedMode, setSelectedMode] = useState<"camera" | "upload">("camera");
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState<string[]>([]);
   const [previewPhoto, setPreviewPhoto] = useState<string | null>(null);
   const [cameraFlash, setCameraFlash] = useState(false);
@@ -428,41 +430,42 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans transition-colors duration-200" id="main_container">
       {/* Top Professional Header */}
-      <header className="bg-white border-b border-slate-200 py-4 px-6 sticky top-0 z-10 shadow-xs" id="app_header">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-600 text-white p-2.5 rounded-xl shadow-sm" id="logo_container">
-              <Camera className="w-6 h-6" />
+      <header className="bg-white border-b border-slate-200 py-1.5 px-3 sm:py-2 sm:px-4 sticky top-0 z-10 shadow-xs" id="app_header">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <div className="bg-blue-600 text-white p-1 sm:p-1.5 rounded-lg shadow-xs" id="logo_container">
+              <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
             <div>
-              <h1 className="font-sans font-semibold text-lg tracking-tight text-slate-950" id="app_title">
+              <h1 className="font-sans font-semibold text-xs sm:text-sm tracking-tight text-slate-950 whitespace-nowrap" id="app_title">
                 Foto para E-mail
               </h1>
-              <p className="text-xs text-slate-500 font-medium" id="app_subtitle">
-                Tire fotos e salve instantaneamente na sua caixa postal
-              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             {hasSmtp && (
-              <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-800 text-[11px] font-bold px-3 py-1.5 rounded-full border border-emerald-200 shadow-2xs" id="smtp_active_badge">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Envio Direto Ativo</span>
+              <div 
+                className="flex items-center gap-1 bg-emerald-50 text-emerald-800 text-[10px] font-bold p-1 sm:px-2 sm:py-1 rounded-full border border-emerald-200 shadow-2xs" 
+                title="Envio Direto Ativo"
+                id="smtp_active_badge"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="hidden md:inline whitespace-nowrap">Envio Direto Ativo</span>
               </div>
             )}
             
             {user ? (
-              <div className="flex items-center gap-3 bg-slate-100 py-1.5 pl-3 pr-2 rounded-full border border-slate-200" id="user_profile_badge">
+              <div className="flex items-center gap-1 sm:gap-2 bg-slate-100 py-0.5 sm:py-1 pl-1.5 pr-1 sm:pl-2.5 sm:pr-1.5 rounded-full border border-slate-200" id="user_profile_badge">
                 <div className="text-right hidden sm:block">
-                  <div className="text-xs font-semibold text-slate-900 leading-tight">{user.displayName}</div>
-                  <div className="text-[10px] text-slate-500 font-mono leading-none">{user.email}</div>
+                  <div className="text-[10px] font-semibold text-slate-900 leading-tight">{user.displayName}</div>
+                  <div className="text-[9px] text-slate-500 font-mono leading-none">{user.email}</div>
                 </div>
                 {user.photoURL ? (
-                  <img src={user.photoURL} alt="Foto Perfil" className="w-8 h-8 rounded-full border border-white object-cover shadow-xs" referrerPolicy="no-referrer" />
+                  <img src={user.photoURL} alt="Foto Perfil" className="w-5.5 h-5.5 sm:w-6.5 sm:h-6.5 rounded-full border border-white object-cover shadow-xs" referrerPolicy="no-referrer" />
                 ) : (
-                  <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm">
-                    {user.displayName?.charAt(0) || <User className="w-4 h-4" />}
+                  <div className="w-5.5 h-5.5 sm:w-6.5 sm:h-6.5 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-[9px] sm:text-[10px]">
+                    {user.displayName?.charAt(0) || <User className="w-3 h-3" />}
                   </div>
                 )}
                 <button 
@@ -471,23 +474,59 @@ export default function App() {
                   title="Sair da Conta"
                   id="logout_button"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                 </button>
               </div>
             ) : hasSmtp && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 font-medium hidden sm:inline">
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <span className="text-[10px] text-slate-500 font-medium hidden sm:inline">
                   Modo Autônomo
                 </span>
                 <button
                   onClick={handleLogin}
                   disabled={isLoggingIn}
-                  className="px-3 py-1.5 text-xs bg-slate-950 border border-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold transition-all shadow-2xs hover:shadow-xs cursor-pointer flex items-center gap-1"
+                  className="px-2 py-1 text-[10px] sm:px-2.5 sm:py-1 sm:text-[11px] bg-slate-950 border border-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold transition-all shadow-2xs hover:shadow-xs cursor-pointer flex items-center gap-1 whitespace-nowrap"
                 >
-                  {isLoggingIn ? "..." : "Entrar com Google"}
+                  {isLoggingIn ? "..." : (
+                    <>
+                      <span>Entrar</span>
+                      <span className="hidden sm:inline">com Google</span>
+                    </>
+                  )}
                 </button>
               </div>
             )}
+
+            {/* Compact Header Mode Switcher Controls */}
+            <div className="bg-slate-100 p-0.5 rounded-lg flex items-center border border-slate-200" id="header_mode_switcher">
+              <button
+                type="button"
+                onClick={() => setSelectedMode("camera")}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                  selectedMode === "camera"
+                    ? "bg-white text-blue-700 shadow-2xs font-bold"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+                id="header_mode_camera"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Foto</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedMode("upload")}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                  selectedMode === "upload"
+                    ? "bg-white text-blue-700 shadow-2xs font-bold"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+                id="header_mode_upload"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Arquivos</span>
+                <span className="xs:hidden">Arq</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -689,39 +728,9 @@ export default function App() {
                   
                   {/* Photo Acquisition Block (Col-Span 7 / 12) */}
                   <div className="md:col-span-7 flex flex-col gap-4" id="photo_block">
-                    <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs">
-                      {/* Mode Tab Option selectors */}
-                      <div className="flex bg-slate-100 p-1 rounded-xl mb-4" id="mode_tabs">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMode("camera")}
-                          className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            selectedMode === "camera"
-                              ? "bg-white text-slate-900 shadow-xs"
-                              : "text-slate-500 hover:text-slate-800"
-                          }`}
-                          id="mode_tab_camera"
-                        >
-                          <Camera className="w-4 h-4" />
-                          Bater Fotos (Câmera)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMode("upload")}
-                          className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            selectedMode === "upload"
-                              ? "bg-white text-slate-900 shadow-xs"
-                              : "text-slate-500 hover:text-slate-800"
-                          }`}
-                          id="mode_tab_upload"
-                        >
-                          <Upload className="w-4 h-4" />
-                          Selecionar Arquivos (Upload)
-                        </button>
-                      </div>
-
+                    <div className="flex flex-col gap-4">
                       {/* WORKZONE STAGE */}
-                      <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center group" id="workzone_stage">
+                      <div className="relative aspect-[9/16] sm:aspect-[4/3] rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center group" id="workzone_stage">
                         {/* Shutter flash animation effect overlay */}
                         <AnimatePresence>
                           {cameraFlash && (
