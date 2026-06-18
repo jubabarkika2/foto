@@ -1073,19 +1073,19 @@ export default function App() {
 
                                     {/* Right Side: Zoom Wheel/Pills Selector */}
                                     <div className="w-1/3 flex justify-end pr-1">
-                                      <div className="relative w-40 h-10 bg-slate-950/85 border border-white/10 rounded-full flex items-center shadow-2xl backdrop-blur-md" id="zoom_pills_wrapper">
+                                      <div className="relative w-32 h-8 bg-slate-950/85 border border-white/10 rounded-full flex items-center shadow-2xl backdrop-blur-md" id="zoom_pills_wrapper">
                                         {/* Left Overlay Gradient */}
-                                        <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-slate-950 to-transparent pointer-events-none rounded-l-full z-15" />
+                                        <div className="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-slate-950 to-transparent pointer-events-none rounded-l-full z-15" />
                                         
                                         {/* Right Overlay Gradient */}
-                                        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-950 to-transparent pointer-events-none rounded-r-full z-15" />
+                                        <div className="absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-slate-950 to-transparent pointer-events-none rounded-r-full z-15" />
 
                                         {/* Horizontal scroll container with custom scrollPadding and snap properties */}
                                         <div 
                                           ref={zoomContainerRef}
                                           onScroll={handleZoomScroll}
-                                          className="w-full h-full flex items-center gap-1.5 overflow-x-auto scrollbar-none snap-x snap-mandatory px-16"
-                                          style={{ scrollPadding: "0 64px" }}
+                                          className="w-full h-full flex items-center gap-1 overflow-x-auto scrollbar-none snap-x snap-mandatory px-[50px]"
+                                          style={{ scrollPadding: "0 50px" }}
                                           id="zoom_pills_container"
                                         >
                                           {ZOOM_OPTIONS.map((val, idx) => {
@@ -1096,7 +1096,7 @@ export default function App() {
                                                 ref={(el) => { zoomOptionRefs.current[idx] = el; }}
                                                 type="button"
                                                 onClick={() => selectZoom(val, idx)}
-                                                className={`w-8 h-8 rounded-full text-[9px] font-black tracking-tighter transition-all duration-200 cursor-pointer flex-shrink-0 flex items-center justify-center snap-center ${
+                                                className={`w-7 h-7 rounded-full text-[8.5px] font-black tracking-tighter transition-all duration-200 cursor-pointer flex-shrink-0 flex items-center justify-center snap-center ${
                                                   isSelected
                                                     ? "bg-yellow-500 text-slate-950 scale-105 shadow-md ring-2 ring-yellow-400/20 z-10 font-bold"
                                                     : "text-white/40 scale-90 hover:text-white"
