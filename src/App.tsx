@@ -23,6 +23,35 @@ import { googleSignIn, logout, initAuth } from "./utils/firebaseAuth";
 import { sendGmailMessage, GmailAttachment } from "./utils/gmail";
 import { User as FirebaseUser } from "firebase/auth";
 
+// Cache mapped from base64 strings to Blob URLs to avoid browser video element black-screens.
+// iOS/Safari and some other mobile browsers fail to render raw base64 data:video urls.
+const blobUrlCache = new Map<string, string>();
+function getBlobUrl(base64Data: string): string {
+  if (!base64Data) return "";
+  if (!base64Data.startsWith("data:")) return base64Data;
+  if (blobUrlCache.has(base64Data)) {
+    return blobUrlCache.get(base64Data)!;
+  }
+  try {
+    const parts = base64Data.split(";base64,");
+    if (parts.length !== 2) return base64Data;
+    const contentType = parts[0].split(":")[1];
+    const raw = window.atob(parts[1]);
+    const rawLength = raw.length;
+    const uInt8Array = new Uint8Array(rawLength);
+    for (let i = 0; i < rawLength; ++i) {
+      uInt8Array[i] = raw.charCodeAt(i);
+    }
+    const blob = new Blob([uInt8Array], { type: contentType });
+    const blobUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(base64Data, blobUrl);
+    return blobUrl;
+  } catch (e) {
+    console.error("Error converting base64 to blob url:", e);
+    return base64Data;
+  }
+}
+
 export default function App() {
   // Authentication states
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -385,22 +414,26 @@ export default function App() {
     recordedChunksRef.current = [];
     
     try {
-      let options = { mimeType: "video/webm;codecs=vp9" };
+      let selectedMimeType = "";
+      const candidates = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+        "video/mp4;codecs=avc1",
+        "video/mp4",
+        "video/quicktime"
+      ];
+
       if (typeof MediaRecorder !== "undefined") {
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: "video/webm;codecs=vp8" };
-        }
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: "video/webm" };
-        }
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: "video/mp4" };
-        }
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: "" };
+        for (const candidate of candidates) {
+          if (MediaRecorder.isTypeSupported(candidate)) {
+            selectedMimeType = candidate;
+            break;
+          }
         }
       }
 
+      const options = selectedMimeType ? { mimeType: selectedMimeType } : {};
       const recorder = new MediaRecorder(cameraStream, options);
       
       recorder.ondataavailable = (event) => {
@@ -410,17 +443,53 @@ export default function App() {
       };
 
       recorder.onstop = () => {
-        const videoBlob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "video/webm" });
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const dataUrl = reader.result as string;
-          setCapturedPhotos(prev => [...prev, dataUrl]);
-        };
-        reader.readAsDataURL(videoBlob);
+        try {
+          if (recordedChunksRef.current.length === 0) {
+            console.error("Nenhum fragmento de vídeo capturado!");
+            setToastMessage("Falha ao salvar vídeo: nenhum dado capturado.");
+            setShowToast(true);
+            setTimeout(() => {
+              setShowToast(false);
+            }, 4000);
+            return;
+          }
+          const finalMimeType = recorder.mimeType || selectedMimeType || "video/webm";
+          const videoBlob = new Blob(recordedChunksRef.current, { type: finalMimeType });
+          
+          if (videoBlob.size === 0) {
+            console.error("Blob de vídeo gerado está vazio!");
+            return;
+          }
+          
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            setCapturedPhotos(prev => [...prev, dataUrl]);
+            setToastMessage("Vídeo gravado e adicionado à galeria!");
+            setShowToast(true);
+            setTimeout(() => {
+              setShowToast(false);
+            }, 3000);
+          };
+          reader.onerror = (e) => {
+            console.error("Erro ao ler o blob do vídeo:", e);
+          };
+          reader.readAsDataURL(videoBlob);
+        } catch (e: any) {
+          console.error("Erro ao processar gravação:", e);
+          setToastMessage(`Erro ao salvar gravação: ${e.message || e}`);
+          setShowToast(true);
+          setTimeout(() => {
+            setShowToast(false);
+          }, 4000);
+        }
       };
 
       mediaRecorderRef.current = recorder;
-      recorder.start(1000);
+      
+      // Omitimos o parâmetro de milissegundos para gravação contínua padrão (evita crashes no iOS/Safari)
+      recorder.start();
+      
       setIsRecording(true);
       setRecordingDuration(0);
 
@@ -428,8 +497,13 @@ export default function App() {
         setRecordingDuration(prev => prev + 1);
       }, 1000);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to start media recorder:", err);
+      setToastMessage(`Não foi possível iniciar o gravador: ${err.message || err}`);
+      setShowToast(true);
+      setTimeout(() => {
+        setShowToast(false);
+      }, 4000);
     }
   };
 
@@ -944,7 +1018,7 @@ export default function App() {
                       return (
                         <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-slate-900 flex items-center justify-center">
                           {isVideo ? (
-                            <video src={photo} className="w-full h-full object-cover" muted loop playsInline />
+                            <video src={getBlobUrl(photo)} className="w-full h-full object-cover" autoPlay muted loop playsInline />
                           ) : (
                             <img src={photo} alt={`Media enviada ${idx + 1}`} className="w-full h-full object-cover" />
                           )}
@@ -1264,7 +1338,7 @@ export default function App() {
                                   className="relative aspect-square group border border-slate-200 hover:border-blue-500 rounded-lg overflow-hidden bg-slate-950 shadow-2xs flex items-center justify-center cursor-zoom-in transition-all duration-200"
                                 >
                                   {isVideo ? (
-                                    <video src={photo} className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105" muted loop playsInline />
+                                    <video src={getBlobUrl(photo)} className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105" autoPlay muted loop playsInline />
                                   ) : (
                                     <img src={photo} alt={`Item ${idx + 1}`} className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105" />
                                   )}
@@ -1453,7 +1527,15 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-auto flex items-center justify-center min-h-[40vh] p-4">
                 {previewPhoto.startsWith("data:video/") ? (
-                  <video src={previewPhoto} controls autoPlay className="max-w-full max-h-[75vh] rounded-lg shadow-2xl" id="lightbox_video" />
+                  <video 
+                    src={getBlobUrl(previewPhoto)} 
+                    controls 
+                    autoPlay 
+                    playsInline
+                    onCanPlay={(e) => e.currentTarget.play().catch(err => console.log(err))}
+                    className="max-w-full max-h-[75vh] rounded-lg shadow-2xl" 
+                    id="lightbox_video" 
+                  />
                 ) : (
                   <img src={previewPhoto} alt="Exibição em tamanho real" className="max-w-full max-h-[80vh] object-contain shadow-2xl" />
                 )}
