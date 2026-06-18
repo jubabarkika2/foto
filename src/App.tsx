@@ -130,6 +130,10 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [sendSuccess, setSendSuccess] = useState(false);
   const [sendingError, setSendingError] = useState<string | null>(null);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [sentPhotosCount, setSentPhotosCount] = useState(0);
+  const [sentPhotosPreview, setSentPhotosPreview] = useState<string[]>([]);
 
   // Camera states
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -524,8 +528,8 @@ export default function App() {
   };
 
   // Email sending orchestration
-  const handleSendEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSendEmail = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (capturedPhotos.length === 0) return;
 
     if (!recipientEmail) {
@@ -533,14 +537,14 @@ export default function App() {
       return;
     }
 
-    // Mutating/sending verification
-    const confirmed = window.confirm(
-      `Deseja enviar ${capturedPhotos.length} foto(s) para o e-mail: ${recipientEmail}?`
-    );
-    if (!confirmed) return;
-
+    // Envia diretamente sem prompt de confirmação
     setIsSending(true);
     setSendingError(null);
+
+    // Dynamic timestamp with seconds to guarantee a brand new, separate e-mail thread in Gmail/Outlook
+    const now = new Date();
+    const secondsStamp = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const finalSubject = `${emailSubject || "Fotos de Email"} (${secondsStamp})`;
 
     try {
       if (hasSmtp) {
@@ -552,7 +556,7 @@ export default function App() {
           },
           body: JSON.stringify({
             to: recipientEmail,
-            subject: emailSubject || "Fotos Enviadas",
+            subject: finalSubject,
             body: emailBody || "",
             imagesBase64: capturedPhotos,
           }),
@@ -562,7 +566,6 @@ export default function App() {
         if (!response.ok || data.error) {
           throw new Error(data.error || "Falha ao enviar através do SMTP do servidor.");
         }
-        setSendSuccess(true);
       } else {
         // Envio clássico via API do Gmail (Requer Token do Google OAuth)
         if (!token) {
@@ -590,13 +593,37 @@ export default function App() {
         await sendGmailMessage(
           token,
           recipientEmail,
-          emailSubject || "Fotos Enviadas",
+          finalSubject,
           emailBody || "",
           attachments
         );
-
-        setSendSuccess(true);
       }
+
+      // Success Operations - caching preview info so the success screen displays perfectly
+      setSentPhotosPreview([...capturedPhotos]);
+      setSentPhotosCount(capturedPhotos.length);
+      
+      // Auto-clear original photos right now, so they're completely empty and never accumulate size for the next turn
+      setCapturedPhotos([]);
+      setPreviewPhoto(null);
+      
+      // Update default subject base with current short timestamp
+      const formatter = new Intl.DateTimeFormat("pt-BR", {
+        dateStyle: "short",
+        timeStyle: "short"
+      });
+      setEmailSubject(`Fotos de Email - ${formatter.format(now)}`);
+
+      // Trigger beautiful floating Toast & Success screen
+      setToastMessage(`Enviado! ${capturedPhotos.length} foto(s) enviada(s) com sucesso.`);
+      setShowToast(true);
+      setSendSuccess(true);
+
+      // Dismiss Toast after 4 seconds
+      setTimeout(() => {
+        setShowToast(false);
+      }, 4000);
+
     } catch (err: any) {
       console.error("Failed to send email:", err);
       setSendingError(
@@ -628,6 +655,23 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans transition-colors duration-200" id="main_container">
+      {/* Dynamic Success Toast */}
+      <AnimatePresence>
+        {showToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            transition={{ type: "spring", stiffness: 300, damping: 25 }}
+            className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-5 py-3 rounded-2xl shadow-2xl font-bold flex items-center gap-2 max-w-sm w-11/12 border border-green-500"
+            id="success_toast"
+          >
+            <CheckCircle className="w-5 h-5 shrink-0 text-white animate-bounce" />
+            <span className="text-[11px] font-sans leading-snug">{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Top Professional Header */}
       <header className="bg-white border-b border-slate-200 py-1.5 px-3 sm:py-2 sm:px-4 sticky top-0 z-10 shadow-xs" id="app_header">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
@@ -691,36 +735,43 @@ export default function App() {
               </div>
             )}
 
-            {/* Compact Header Mode Switcher Controls */}
-            <div className="bg-slate-100 p-0.5 rounded-lg flex items-center border border-slate-200" id="header_mode_switcher">
+            {/* Compact Header Send Button */}
+            {!needsAuth && (
               <button
                 type="button"
-                onClick={() => setSelectedMode("camera")}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
-                  selectedMode === "camera"
-                    ? "bg-white text-blue-700 shadow-2xs font-bold"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
-                id="header_mode_camera"
+                onClick={() => {
+                  if (capturedPhotos.length === 0) {
+                    setToastMessage("Capture ou mude para Arquivo(s) e adicione fotos antes de enviar!");
+                    setShowToast(true);
+                    setTimeout(() => {
+                      setShowToast(false);
+                    }, 4000);
+                    return;
+                  }
+                  handleSendEmail();
+                }}
+                disabled={isSending}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 rounded-xl text-xs font-black transition-all duration-150 cursor-pointer bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-xs hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                id="header_send_button"
               >
-                <Camera className="w-3.5 h-3.5" />
-                <span>Foto</span>
+                {isSending ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span className="text-[11px]">Enviando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span className="text-[11px]">Enviar</span>
+                    {capturedPhotos.length > 0 && (
+                      <span className="ml-1 bg-white text-emerald-700 font-black px-1.5 py-0.25 rounded-full text-[9px] min-w-4 flex items-center justify-center shadow-2xs">
+                        {capturedPhotos.length}
+                      </span>
+                    )}
+                  </>
+                )}
               </button>
-              <button
-                type="button"
-                onClick={() => setSelectedMode("upload")}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
-                  selectedMode === "upload"
-                    ? "bg-white text-blue-700 shadow-2xs font-bold"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
-                id="header_mode_upload"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Arquivos</span>
-                <span className="xs:hidden">Arq</span>
-              </button>
-            </div>
+            )}
           </div>
         </div>
       </header>
@@ -884,11 +935,11 @@ export default function App() {
                     Tudo Enviado!
                   </h2>
                   <p className="text-slate-600 text-sm mb-6" id="success_description">
-                    Seu lote de <strong>{capturedPhotos.length} foto(s)</strong> foi enviado com sucesso para <strong className="text-slate-900 break-all">{recipientEmail}</strong> de forma direta e segura.
+                    Seu lote de <strong>{sentPhotosCount} foto(s)</strong> foi enviado com sucesso para <strong className="text-slate-900 break-all">{recipientEmail}</strong> de forma direta e segura.
                   </p>
 
                   <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto p-2 bg-slate-50 border border-slate-100 rounded-2xl mb-6">
-                    {capturedPhotos.map((photo, idx) => {
+                    {sentPhotosPreview.map((photo, idx) => {
                       const isVideo = photo.startsWith("data:video/");
                       return (
                         <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-slate-900 flex items-center justify-center">
@@ -1152,13 +1203,37 @@ export default function App() {
                         </AnimatePresence>
                       </div>
 
-                      {/* Instructions panel */}
-                      <p className="text-[11px] text-slate-400 mt-2.5 text-center flex items-center justify-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
-                        {selectedMode === "camera" 
-                          ? "Bata fotos consecutivas! Elas vão se acumulando na sua galeria abaixo." 
-                          : "Selecione múltiplas imagens do seu dispositivo."}
-                      </p>
+                      {/* Mode Switcher Buttons (replaces the instructions text) */}
+                      <div className="mt-4 mb-1 flex justify-center" id="workspace_mode_switcher_panel">
+                        <div className="bg-slate-100 p-0.75 rounded-2xl flex items-center border border-slate-200/60 shadow-inner w-52 justify-between">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedMode("camera")}
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer ${
+                              selectedMode === "camera"
+                                ? "bg-white text-blue-600 shadow-xs scale-102"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                            id="workspace_mode_camera"
+                          >
+                            <Camera className={`w-4 h-4 ${selectedMode === "camera" ? "text-blue-600" : "text-slate-450"}`} />
+                            <span>Foto</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedMode("upload")}
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer ${
+                              selectedMode === "upload"
+                                ? "bg-white text-blue-600 shadow-xs scale-102"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                            id="workspace_mode_upload"
+                          >
+                            <Upload className={`w-4 h-4 ${selectedMode === "upload" ? "text-blue-600" : "text-slate-450"}`} />
+                            <span>Arq</span>
+                          </button>
+                        </div>
+                      </div>
 
                       {/* LIVE GALLERY DRAWER SECTION */}
                       <div className="mt-5 border-t border-slate-100 pt-4" id="gallery_drawer">
@@ -1183,32 +1258,37 @@ export default function App() {
                             {capturedPhotos.map((photo, idx) => {
                               const isVideo = photo.startsWith("data:video/");
                               return (
-                                <div key={idx} className="relative aspect-square group border border-slate-200 rounded-lg overflow-hidden bg-slate-950 shadow-2xs flex items-center justify-center">
+                                <div 
+                                  key={idx} 
+                                  onClick={() => setPreviewPhoto(photo)}
+                                  className="relative aspect-square group border border-slate-200 hover:border-blue-500 rounded-lg overflow-hidden bg-slate-950 shadow-2xs flex items-center justify-center cursor-zoom-in transition-all duration-200"
+                                >
                                   {isVideo ? (
-                                    <video src={photo} className="w-full h-full object-cover" muted loop playsInline />
+                                    <video src={photo} className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105" muted loop playsInline />
                                   ) : (
-                                    <img src={photo} alt={`Item ${idx + 1}`} className="w-full h-full object-cover" />
+                                    <img src={photo} alt={`Item ${idx + 1}`} className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105" />
                                   )}
-                                  <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 backdrop-blur-3xs">
-                                    <button
-                                      type="button"
-                                      onClick={() => setPreviewPhoto(photo)}
-                                      className="p-1.25 bg-white text-slate-800 rounded-full hover:scale-105 transition-transform cursor-pointer"
-                                      title="Visualizar ampliado"
-                                    >
-                                      <Eye className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setCapturedPhotos(prev => prev.filter((_, i) => i !== idx));
-                                      }}
-                                      className="p-1.25 bg-red-650 hover:bg-red-700 text-white rounded-full hover:scale-105 transition-transform cursor-pointer"
-                                      title="Deletar"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
+                                  
+                                  {/* Subtly darkened overlay on hover with Eye icon in the client-side center */}
+                                  <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                                    <div className="p-1.5 bg-white/90 text-slate-800 rounded-full shadow-md">
+                                      <Eye className="w-4 h-4" />
+                                    </div>
                                   </div>
+
+                                  {/* Absolute Delete Button with safe stopPropagation */}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation(); // Prevents triggering previewPhoto click
+                                      setCapturedPhotos(prev => prev.filter((_, i) => i !== idx));
+                                    }}
+                                    className="absolute top-1 right-1 p-1 bg-red-600/90 text-white rounded-full hover:bg-red-700 transition-colors cursor-pointer z-10 shadow-md"
+                                    title="Excluir"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+
                                   <span className="absolute bottom-1 right-1 px-1 text-[8px] font-bold bg-slate-900/70 text-white rounded flex items-center gap-1 leading-none">
                                     {isVideo && <Video className="w-2.5 h-2.5 text-yellow-400" />}
                                     #{idx + 1}
