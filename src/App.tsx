@@ -15,7 +15,8 @@ import {
   X,
   Eye,
   Settings,
-  SwitchCamera
+  SwitchCamera,
+  Video
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { googleSignIn, logout, initAuth } from "./utils/firebaseAuth";
@@ -135,6 +136,61 @@ export default function App() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [cameraFacingMode, setCameraFacingMode] = useState<"user" | "environment">("environment");
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+
+  // Video recording states and refs
+  const [cameraMode, setCameraMode] = useState<"photo" | "video">("photo");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // iPhone-style Zoom Dial Controls
+  const zoomContainerRef = useRef<HTMLDivElement>(null);
+  const zoomOptionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const isScrollingProgrammatically = useRef(false);
+  const initialScrollDone = useRef(false);
+
+  const ZOOM_OPTIONS = [0.5, 1.0, 3.0, 5.0, 10.0, 15.0];
+
+  const selectZoom = (val: number, index: number) => {
+    setZoomLevel(val);
+    isScrollingProgrammatically.current = true;
+    const btn = zoomOptionRefs.current[index];
+    if (btn) {
+      btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    }
+    setTimeout(() => {
+      isScrollingProgrammatically.current = false;
+    }, 450);
+  };
+
+  const handleZoomScroll = () => {
+    if (isScrollingProgrammatically.current) return;
+    if (!zoomContainerRef.current) return;
+
+    const container = zoomContainerRef.current;
+    const containerCenter = container.scrollLeft + container.clientWidth / 2;
+
+    let closestIndex = 1; // Default to 1.0x
+    let minDiff = Infinity;
+
+    zoomOptionRefs.current.forEach((btn, idx) => {
+      if (!btn) return;
+      const btnCenter = btn.offsetLeft + btn.clientWidth / 2;
+      const diff = Math.abs(containerCenter - btnCenter);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIndex = idx;
+      }
+    });
+
+    const targetZoom = ZOOM_OPTIONS[closestIndex];
+    if (targetZoom !== undefined && targetZoom !== zoomLevel) {
+      setZoomLevel(targetZoom);
+    }
+  };
 
   // Refs for camera element
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -192,6 +248,19 @@ export default function App() {
     return () => stopCamera();
   }, [selectedMode, needsAuth, cameraFacingMode]);
 
+  // Center scroll the zoom selector automatically on stream startup or camera initialization
+  useEffect(() => {
+    if (selectedMode === "camera") {
+      const timer = setTimeout(() => {
+        const btn = zoomOptionRefs.current[1]; // Index 1 is 1.0x
+        if (btn) {
+          btn.scrollIntoView({ behavior: "instant" as any, inline: "center", block: "nearest" });
+        }
+      }, 550);
+      return () => clearTimeout(timer);
+    }
+  }, [selectedMode, cameraFacingMode]);
+
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setAuthError(null);
@@ -241,14 +310,29 @@ export default function App() {
         cameraStream.getTracks().forEach(track => track.stop());
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: { ideal: cameraFacingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
+      // Resilient check to request audio track for video support, falling back to video-only if denied
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { 
+            facingMode: { ideal: cameraFacingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: true
+        });
+      } catch (audioErr) {
+        console.warn("Microphone access denied or unavailable, falling back to video only:", audioErr);
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { 
+            facingMode: { ideal: cameraFacingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+      }
+
       setCameraStream(stream);
 
       if (videoRef.current) {
@@ -277,6 +361,95 @@ export default function App() {
       cameraStream.getTracks().forEach(track => track.stop());
       setCameraStream(null);
     }
+    if (isRecording) {
+      stopRecording();
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  };
+
+  const formatDuration = (sec: number) => {
+    const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+    const ss = String(sec % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  };
+
+  const startRecording = () => {
+    if (!cameraStream) return;
+    recordedChunksRef.current = [];
+    
+    try {
+      let options = { mimeType: "video/webm;codecs=vp9" };
+      if (typeof MediaRecorder !== "undefined") {
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options = { mimeType: "video/webm;codecs=vp8" };
+        }
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options = { mimeType: "video/webm" };
+        }
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options = { mimeType: "video/mp4" };
+        }
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options = { mimeType: "" };
+        }
+      }
+
+      const recorder = new MediaRecorder(cameraStream, options);
+      
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const videoBlob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "video/webm" });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const dataUrl = reader.result as string;
+          setCapturedPhotos(prev => [...prev, dataUrl]);
+        };
+        reader.readAsDataURL(videoBlob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start(1000);
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+
+    } catch (err) {
+      console.error("Failed to start media recorder:", err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  };
+
+  const handleShutterClick = () => {
+    if (cameraMode === "photo") {
+      capturePhoto();
+    } else {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        startRecording();
+      }
+    }
   };
 
   const capturePhoto = () => {
@@ -298,7 +471,24 @@ export default function App() {
           ctx.translate(width, 0);
           ctx.scale(-1, 1);
         }
-        ctx.drawImage(video, 0, 0, width, height);
+        if (zoomLevel > 1) {
+          const cropWidth = width / zoomLevel;
+          const cropHeight = height / zoomLevel;
+          const cropX = (width - cropWidth) / 2;
+          const cropY = (height - cropHeight) / 2;
+          ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, width, height);
+        } else if (zoomLevel < 1) {
+          // Digital zoom-out wide-angle simulation for 0.5x
+          ctx.fillStyle = "#020617";
+          ctx.fillRect(0, 0, width, height);
+          const newWidth = width * zoomLevel;
+          const newHeight = height * zoomLevel;
+          const x = (width - newWidth) / 2;
+          const y = (height - newHeight) / 2;
+          ctx.drawImage(video, x, y, newWidth, newHeight);
+        } else {
+          ctx.drawImage(video, 0, 0, width, height);
+        }
         ctx.restore();
         const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
         setCapturedPhotos(prev => [...prev, dataUrl]);
@@ -698,14 +888,22 @@ export default function App() {
                   </p>
 
                   <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto p-2 bg-slate-50 border border-slate-100 rounded-2xl mb-6">
-                    {capturedPhotos.map((photo, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 shadow-2xs">
-                        <img src={photo} alt={`Foto enviada ${idx + 1}`} className="w-full h-full object-cover" />
-                        <span className="absolute bottom-1 left-1 px-1.5 py-0.5 text-[8px] font-bold bg-black/60 text-white rounded-md">
-                          #{idx + 1}
-                        </span>
-                      </div>
-                    ))}
+                    {capturedPhotos.map((photo, idx) => {
+                      const isVideo = photo.startsWith("data:video/");
+                      return (
+                        <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-slate-900 flex items-center justify-center">
+                          {isVideo ? (
+                            <video src={photo} className="w-full h-full object-cover" muted loop playsInline />
+                          ) : (
+                            <img src={photo} alt={`Media enviada ${idx + 1}`} className="w-full h-full object-cover" />
+                          )}
+                          <span className="absolute bottom-1 left-1 px-1.5 py-0.5 text-[8px] font-bold bg-black/70 text-white rounded-md flex items-center gap-1">
+                            {isVideo && <Video className="w-2.5 h-2.5 text-yellow-400" />}
+                            #{idx + 1}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <div className="flex flex-col sm:flex-row gap-3">
@@ -784,29 +982,135 @@ export default function App() {
                                     playsInline
                                     muted
                                     className="w-full h-full object-cover"
-                                    style={{ transform: cameraFacingMode === "user" ? "scaleX(-1)" : "none" }}
+                                    style={{ 
+                                      transform: `${cameraFacingMode === "user" ? "scaleX(-1)" : ""} scale(${zoomLevel})`,
+                                      transition: "transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)"
+                                    }}
                                   />
                                   {/* Botão flutuante discreto para inverter câmera (frontal / traseira) */}
-                                  <button
-                                    type="button"
-                                    onClick={() => setCameraFacingMode(prev => prev === "environment" ? "user" : "environment")}
-                                    className="absolute top-3 right-3 bg-slate-950/60 hover:bg-slate-950/80 text-white p-2 rounded-full shadow-lg backdrop-blur-xs transition-all border border-white/10 active:scale-95 cursor-pointer flex items-center justify-center z-10"
-                                    title={cameraFacingMode === "environment" ? "Câmera Frontal (Selfie)" : "Câmera Traseira"}
-                                    id="toggle_camera_facing_button"
-                                  >
-                                    <SwitchCamera className="w-4 h-4" />
-                                  </button>
-                                  {/* Shutter button overlay */}
-                                  <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4">
+                                  {isRecording && (
+                                    <div className="absolute top-3 left-3 bg-red-650/95 text-white font-mono text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-lg z-20 animate-pulse border border-red-500/25 select-none whitespace-nowrap">
+                                      <span className="w-1.5 h-1.5 bg-white rounded-full inline-block animate-ping" />
+                                      GRAVANDO &bull; {formatDuration(recordingDuration)}
+                                    </div>
+                                  )}
+                                  {!isRecording && (
                                     <button
                                       type="button"
-                                      onClick={capturePhoto}
-                                      className="w-16 h-16 bg-white hover:bg-red-50 p-2 rounded-full border-4 border-slate-300 flex items-center justify-center shadow-lg transform active:scale-95 transition-all cursor-pointer hover:border-slate-100"
-                                      title="Capturar Foto"
-                                      id="shutter_button"
+                                      onClick={() => {
+                                        setCameraFacingMode(prev => prev === "environment" ? "user" : "environment");
+                                        selectZoom(1.0, 1); // Reset zoom dynamically and scroll to center 1.0x option
+                                      }}
+                                      className="absolute top-3 right-3 bg-slate-950/60 hover:bg-slate-950/80 text-white p-2 rounded-full shadow-lg backdrop-blur-xs transition-all border border-white/10 active:scale-95 cursor-pointer flex items-center justify-center z-10"
+                                      title={cameraFacingMode === "environment" ? "Câmera Frontal (Selfie)" : "Câmera Traseira"}
+                                      id="toggle_camera_facing_button"
                                     >
-                                      <div className="w-10 h-10 bg-red-600 rounded-full" />
+                                      <SwitchCamera className="w-4 h-4" />
                                     </button>
+                                  )}
+                                                                {/* Bottom controls panel containing Left: Mode Selector, Center: Shutter Button, Right: Zoom Wheel */}
+                                  <div className="absolute bottom-4 left-0 right-0 px-3 flex items-center justify-between gap-2 z-10 select-none">
+                                    
+                                    {/* Left Side: FOTO / VÍDEO Mode Selector */}
+                                    <div className="w-1/3 flex justify-start pl-1">
+                                      {!isRecording ? (
+                                        <div className="flex gap-1 p-0.75 bg-slate-950/80 border border-white/10 rounded-full shadow-lg backdrop-blur-md">
+                                          <button
+                                            type="button"
+                                            onClick={() => setCameraMode("photo")}
+                                            className={`px-3 py-1.5 rounded-full text-[9px] font-extrabold uppercase tracking-widest transition-all duration-150 cursor-pointer ${
+                                              cameraMode === "photo" 
+                                                ? "bg-yellow-500 text-slate-950 scale-105 shadow-sm font-black" 
+                                                : "text-white/45 hover:text-white"
+                                            }`}
+                                          >
+                                            Foto
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setCameraMode("video")}
+                                            className={`px-3 py-1.5 rounded-full text-[9px] font-extrabold uppercase tracking-widest transition-all duration-150 cursor-pointer ${
+                                              cameraMode === "video" 
+                                                ? "bg-yellow-500 text-slate-950 scale-105 shadow-sm font-black" 
+                                                : "text-white/45 hover:text-white"
+                                            }`}
+                                          >
+                                            Vídeo
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="bg-red-950/50 border border-red-500/20 px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-md">
+                                          <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
+                                          <span className="text-[8px] text-red-400 font-black uppercase tracking-wider">Gravando</span>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Center Side: Shutter Button */}
+                                    <div className="w-1/3 flex justify-center">
+                                      <button
+                                        type="button"
+                                        onClick={handleShutterClick}
+                                        className={`relative w-16 h-16 p-1 rounded-full border-4 flex items-center justify-center shadow-lg transform active:scale-95 transition-all duration-300 cursor-pointer ${
+                                          isRecording 
+                                            ? "bg-white/20 border-red-500 scale-110" 
+                                            : cameraMode === "video"
+                                              ? "bg-white border-slate-300 hover:bg-red-50 hover:border-slate-100"
+                                              : "bg-white hover:bg-red-50 border-slate-300 hover:border-slate-100"
+                                        }`}
+                                        title={cameraMode === "photo" ? "Capturar Foto" : isRecording ? "Parar Gravação" : "Iniciar Gravação de Vídeo"}
+                                        id="shutter_button"
+                                      >
+                                        {cameraMode === "photo" ? (
+                                          <div className="w-10 h-10 bg-red-650 rounded-full" />
+                                        ) : isRecording ? (
+                                          <div className="w-5 h-5 bg-red-650 rounded-xs animate-pulse" />
+                                        ) : (
+                                          <div className="w-10 h-10 bg-red-600 rounded-full hover:bg-red-700 transition-all shadow-inner border border-red-700" />
+                                        )}
+                                      </button>
+                                    </div>
+
+                                    {/* Right Side: Zoom Wheel/Pills Selector */}
+                                    <div className="w-1/3 flex justify-end pr-1">
+                                      <div className="relative w-40 h-10 bg-slate-950/85 border border-white/10 rounded-full flex items-center shadow-2xl backdrop-blur-md" id="zoom_pills_wrapper">
+                                        {/* Left Overlay Gradient */}
+                                        <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-slate-950 to-transparent pointer-events-none rounded-l-full z-15" />
+                                        
+                                        {/* Right Overlay Gradient */}
+                                        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-950 to-transparent pointer-events-none rounded-r-full z-15" />
+
+                                        {/* Horizontal scroll container with custom scrollPadding and snap properties */}
+                                        <div 
+                                          ref={zoomContainerRef}
+                                          onScroll={handleZoomScroll}
+                                          className="w-full h-full flex items-center gap-1.5 overflow-x-auto scrollbar-none snap-x snap-mandatory px-16"
+                                          style={{ scrollPadding: "0 64px" }}
+                                          id="zoom_pills_container"
+                                        >
+                                          {ZOOM_OPTIONS.map((val, idx) => {
+                                            const isSelected = zoomLevel === val;
+                                            return (
+                                              <button
+                                                key={val}
+                                                ref={(el) => { zoomOptionRefs.current[idx] = el; }}
+                                                type="button"
+                                                onClick={() => selectZoom(val, idx)}
+                                                className={`w-8 h-8 rounded-full text-[9px] font-black tracking-tighter transition-all duration-200 cursor-pointer flex-shrink-0 flex items-center justify-center snap-center ${
+                                                  isSelected
+                                                    ? "bg-yellow-500 text-slate-950 scale-105 shadow-md ring-2 ring-yellow-400/20 z-10 font-bold"
+                                                    : "text-white/40 scale-90 hover:text-white"
+                                                }`}
+                                                title={`Zoom ${val === 0.5 ? "0.5x" : `${val}x`}`}
+                                              >
+                                                {val === 0.5 ? "0,5" : `${val}x`}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    </div>
+
                                   </div>
                                 </div>
                               )}
@@ -860,7 +1164,7 @@ export default function App() {
                       <div className="mt-5 border-t border-slate-100 pt-4" id="gallery_drawer">
                         <div className="flex items-center justify-between mb-2">
                           <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                            Galeria Temporária ({capturedPhotos.length} foto{capturedPhotos.length !== 1 ? "s" : ""})
+                            Galeria Temporária ({capturedPhotos.length} item{capturedPhotos.length !== 1 ? "s" : ""})
                           </label>
                           {capturedPhotos.length > 0 && (
                             <button
@@ -876,34 +1180,42 @@ export default function App() {
 
                         {capturedPhotos.length > 0 ? (
                           <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-40 overflow-y-auto p-1 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                            {capturedPhotos.map((photo, idx) => (
-                              <div key={idx} className="relative aspect-square group border border-slate-200 rounded-lg overflow-hidden bg-slate-200 shadow-2xs">
-                                <img src={photo} alt={`Foto ${idx + 1}`} className="w-full h-full object-cover" />
-                                <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 backdrop-blur-3xs">
-                                  <button
-                                    type="button"
-                                    onClick={() => setPreviewPhoto(photo)}
-                                    className="p-1.25 bg-white text-slate-800 rounded-full hover:scale-105 transition-transform"
-                                    title="Visualizar ampliado"
-                                  >
-                                    <Eye className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setCapturedPhotos(prev => prev.filter((_, i) => i !== idx));
-                                    }}
-                                    className="p-1.25 bg-red-650 hover:bg-red-700 text-white rounded-full hover:scale-105 transition-transform"
-                                    title="Deletar foto"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
+                            {capturedPhotos.map((photo, idx) => {
+                              const isVideo = photo.startsWith("data:video/");
+                              return (
+                                <div key={idx} className="relative aspect-square group border border-slate-200 rounded-lg overflow-hidden bg-slate-950 shadow-2xs flex items-center justify-center">
+                                  {isVideo ? (
+                                    <video src={photo} className="w-full h-full object-cover" muted loop playsInline />
+                                  ) : (
+                                    <img src={photo} alt={`Item ${idx + 1}`} className="w-full h-full object-cover" />
+                                  )}
+                                  <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 backdrop-blur-3xs">
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewPhoto(photo)}
+                                      className="p-1.25 bg-white text-slate-800 rounded-full hover:scale-105 transition-transform cursor-pointer"
+                                      title="Visualizar ampliado"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCapturedPhotos(prev => prev.filter((_, i) => i !== idx));
+                                      }}
+                                      className="p-1.25 bg-red-650 hover:bg-red-700 text-white rounded-full hover:scale-105 transition-transform cursor-pointer"
+                                      title="Deletar"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                  <span className="absolute bottom-1 right-1 px-1 text-[8px] font-bold bg-slate-900/70 text-white rounded flex items-center gap-1 leading-none">
+                                    {isVideo && <Video className="w-2.5 h-2.5 text-yellow-400" />}
+                                    #{idx + 1}
+                                  </span>
                                 </div>
-                                <span className="absolute bottom-1 right-1 px-1 text-[8px] font-bold bg-slate-900/70 text-white rounded">
-                                  #{idx + 1}
-                                </span>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         ) : (
                           <div className="text-center py-6 bg-slate-50 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center gap-1.5 text-slate-400">
@@ -1059,8 +1371,12 @@ export default function App() {
               <div className="p-4 bg-slate-950/25 backdrop-blur-md absolute bottom-0 inset-x-0 text-white text-xs select-none">
                 Visualização em tamanho real
               </div>
-              <div className="flex-1 overflow-auto flex items-center justify-center min-h-[40vh]">
-                <img src={previewPhoto} alt="Exibição em tamanho real" className="max-w-full max-h-[80vh] object-contain shadow-2xl" />
+              <div className="flex-1 overflow-auto flex items-center justify-center min-h-[40vh] p-4">
+                {previewPhoto.startsWith("data:video/") ? (
+                  <video src={previewPhoto} controls autoPlay className="max-w-full max-h-[75vh] rounded-lg shadow-2xl" id="lightbox_video" />
+                ) : (
+                  <img src={previewPhoto} alt="Exibição em tamanho real" className="max-w-full max-h-[80vh] object-contain shadow-2xl" />
+                )}
               </div>
             </motion.div>
           </motion.div>

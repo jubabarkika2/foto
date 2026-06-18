@@ -66,24 +66,26 @@ async function startServer() {
 
       if (imagesBase64 && Array.isArray(imagesBase64)) {
         imagesBase64.forEach((img, index) => {
-          const match = img.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+          const match = img.match(/^data:((?:image|video)\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
           const mimeType = match ? match[1] : "image/jpeg";
           const base64Data = match ? match[2] : img;
           const extension = mimeType.split("/")[1] || "jpg";
+          const isVideo = mimeType.startsWith("video/");
           attachments.push({
-            filename: `foto_${index + 1}_${Date.now()}.${extension}`,
+            filename: `${isVideo ? "video" : "foto"}_${index + 1}_${Date.now()}.${extension}`,
             content: base64Data,
             encoding: "base64",
             contentType: mimeType
           });
         });
       } else if (imageBase64) {
-        const match = imageBase64.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+        const match = imageBase64.match(/^data:((?:image|video)\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
         const mimeType = match ? match[1] : "image/jpeg";
         const base64Data = match ? match[2] : imageBase64;
         const extension = mimeType.split("/")[1] || "jpg";
+        const isVideo = mimeType.startsWith("video/");
         attachments.push({
-          filename: `foto_capturada_${Date.now()}.${extension}`,
+          filename: `${isVideo ? "video" : "foto"}_capturada_${Date.now()}.${extension}`,
           content: base64Data,
           encoding: "base64",
           contentType: mimeType
