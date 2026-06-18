@@ -14,7 +14,8 @@ import {
   ArrowRight,
   X,
   Eye,
-  Settings
+  Settings,
+  SwitchCamera
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { googleSignIn, logout, initAuth } from "./utils/firebaseAuth";
@@ -133,6 +134,7 @@ export default function App() {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
+  const [cameraFacingMode, setCameraFacingMode] = useState<"user" | "environment">("environment");
 
   // Refs for camera element
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -188,7 +190,7 @@ export default function App() {
       stopCamera();
     }
     return () => stopCamera();
-  }, [selectedMode, needsAuth]);
+  }, [selectedMode, needsAuth, cameraFacingMode]);
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
@@ -241,7 +243,7 @@ export default function App() {
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { 
-          facingMode: { ideal: "environment" },
+          facingMode: { ideal: cameraFacingMode },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
@@ -290,7 +292,14 @@ export default function App() {
       canvas.height = height;
       
       if (ctx) {
+        ctx.save();
+        if (cameraFacingMode === "user") {
+          // Mirror the image horizontally
+          ctx.translate(width, 0);
+          ctx.scale(-1, 1);
+        }
         ctx.drawImage(video, 0, 0, width, height);
+        ctx.restore();
         const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
         setCapturedPhotos(prev => [...prev, dataUrl]);
         
@@ -485,14 +494,9 @@ export default function App() {
                 <button
                   onClick={handleLogin}
                   disabled={isLoggingIn}
-                  className="px-2 py-1 text-[10px] sm:px-2.5 sm:py-1 sm:text-[11px] bg-slate-950 border border-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold transition-all shadow-2xs hover:shadow-xs cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                  className="px-2.5 py-1 text-[10px] sm:px-3 sm:py-1 sm:text-[11px] bg-slate-950 border border-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold transition-all shadow-2xs hover:shadow-xs cursor-pointer flex items-center gap-1 whitespace-nowrap"
                 >
-                  {isLoggingIn ? "..." : (
-                    <>
-                      <span>Entrar</span>
-                      <span className="hidden sm:inline">com Google</span>
-                    </>
-                  )}
+                  {isLoggingIn ? "..." : "Entrar com Google"}
                 </button>
               </div>
             )}
@@ -780,7 +784,18 @@ export default function App() {
                                     playsInline
                                     muted
                                     className="w-full h-full object-cover"
+                                    style={{ transform: cameraFacingMode === "user" ? "scaleX(-1)" : "none" }}
                                   />
+                                  {/* Botão flutuante discreto para inverter câmera (frontal / traseira) */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setCameraFacingMode(prev => prev === "environment" ? "user" : "environment")}
+                                    className="absolute top-3 right-3 bg-slate-950/60 hover:bg-slate-950/80 text-white p-2 rounded-full shadow-lg backdrop-blur-xs transition-all border border-white/10 active:scale-95 cursor-pointer flex items-center justify-center z-10"
+                                    title={cameraFacingMode === "environment" ? "Câmera Frontal (Selfie)" : "Câmera Traseira"}
+                                    id="toggle_camera_facing_button"
+                                  >
+                                    <SwitchCamera className="w-4 h-4" />
+                                  </button>
                                   {/* Shutter button overlay */}
                                   <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4">
                                     <button
